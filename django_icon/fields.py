@@ -1,90 +1,77 @@
 
-from uuid import uuid4
-
 from django.db import models
 from django.core import exceptions
 from django.utils.translation import gettext_lazy as _
-
-from .core import Barcode
-from django.conf import settings
 from django.core import checks
-from django.utils.crypto import get_random_string
+from django.conf import settings
+import intervals as I
+from .validators import validate_icon
 
-default_country = getattr(settings,'BARCODE_COUNTRY','950')
-default_brand = getattr(settings,'BARCODE_BRAND','0000')
+default_min = getattr(settings,'ICON_MIN',16)
+default_max = getattr(settings,'ICON_MAX',256)
 
-class BarcodeFieldDescriptor(object):
-    '''Field descriptor responsible for the seamless access of Barcode object properties'''
-    def __init__(self,_name,_class):
-        self._name = _name
-        self._class = _class
+class IconField(models.ImageField):
+    '''Icon model field based on a Django ImageField''' 
+    description = _('Icon image.')
 
-    def __get__(self,instance=None,owner=None):
-        value = instance.__dict__[self._name]
-        if value is None:
-            return value
-        return self._class(value)
+    def validate(self,value, model_instance):
+        validate_icon(value, self.min_width,self.max_width,self.min_height,self.max_height)
+        super(IconField,self).validate(value, model_instance)
+        
+    def __init__(self,
+        min_width:int=default_min,
+        min_height:int=default_min,
+        max_width:int=default_max,
+        max_height:int=default_max,
+        **kwargs): 
 
-    def __set__(self,instance,value):
-        instance.__dict__[self._name] = value
+        self.min_width = min_width
+        self.min_height = min_height
+        self.max_width = max_width
+        self.max_height = max_height
 
-
-class BarcodeField(models.CharField):
-    '''Barcode model field based on a EAN13 standard''' 
-    description = _('EAN13 Barcode.')
-
-    def generate_default(self):
-        return "".join([self.country,self.brand,get_random_string(5, '0123456789')])
-
-    def contribute_to_class(self, cls, name):
-        super(BarcodeField, self).contribute_to_class(cls, name)
-        setattr(cls, self.name, BarcodeFieldDescriptor(self.name,Barcode))
-
-    def __init__(self,country:str=default_country,brand:str=default_brand, **kwargs): 
-        self.country = country
-        self.brand = brand
-        kwargs['max_length']=13
-        kwargs['default']=self.generate_default()
         super().__init__(**kwargs)
 
     def deconstruct(self):
         name, path, args, kwargs = super().deconstruct()
-        del kwargs['max_length']
-        del kwargs['default']
-        if self.country != default_country:
-            kwargs['country'] = self.country
-        if self.brand != default_brand:
-            kwargs['brand'] = self.brand
+
+        if self.min_width != default_min:
+            kwargs['min_width']= self.min_width
+        if self.max_width != default_max:
+            kwargs['max_width']= self.max_width
+        if self.min_height != default_min:
+            kwargs['min_height']= self.min_height
+        if self.max_height != default_max:
+            kwargs['max_height']= self.max_height
+
         return name, path, args, kwargs
 
     def check(self, **kwargs):
         return [
             *super().check(**kwargs),
-            *self._check_country(),
-            *self._check_brand(),
+            *self._check_kwargs()
         ]
 
-    def _check_country(self):
-        if len(self.country) is not 3:
-            return [
-                checks.Error(
-                    "%s's country argument must have a 3 digits." % self.__class__.__name__,
-                    obj=self,
-                    id='fields.E201',
-                )
-            ]
-        else:
-           return []
+    def _check_kwargs(self):
+    
+        if I.closed(self.min_width,self.max_width).is_empty():    
+                return [
+                        checks.Error(
+                            "%s's width range is empty. Check min_width and max_width parameters." % self.__class__.__name__,
+                            obj=self,
+                            id='fields.E001',
+                        )
+                    ]
 
-    def _check_brand(self):
-        if len(self.brand) is not 4:
-            return [
-                checks.Error(
-                    "%s's country argument must have a 4 digits." % self.__class__.__name__,
-                    obj=self,
-                    id='fields.E201',
-                )
-            ]
-        else:
-           return []
-   
+        if I.closed(self.min_height,self.max_height).is_empty():    
+                return [
+                        checks.Error(
+                            "%s's height range is empty. Check min_height and max_height parameters." % self.__class__.__name__,
+                            obj=self,
+                            id='fields.E001',
+                        )
+                    ]              
+
+        return []
+
+    
